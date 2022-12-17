@@ -189,7 +189,7 @@ UPROGS=\
 	$U/_wc\
 	$U/_zombie\
 	$U/_sleep\
-
+	$U/_pingpong\
 
 
 ifeq ($(LAB),$(filter $(LAB), lock))
