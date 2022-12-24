@@ -48,7 +48,7 @@ void
 procinit(void)
 {
   struct proc *p;
-  
+
   initlock(&pid_lock, "nextpid");
   initlock(&wait_lock, "wait_lock");
   for(p = proc; p < &proc[NPROC]; p++) {
@@ -684,4 +684,18 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+uint64
+nproc(void)
+{
+  uint64 num = 0;
+  for(struct proc* p = proc; p < &proc[NPROC]; ++p) {
+    acquire(&p->lock);
+    if(p->state != UNUSED) {
+      ++num;
+    }
+    release(&p->lock);
+  }
+  return num;
 }
