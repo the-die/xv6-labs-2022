@@ -69,12 +69,37 @@ sys_sleep(void)
   return 0;
 }
 
-
 #ifdef LAB_PGTBL
-int
+uint64
 sys_pgaccess(void)
 {
-  // lab pgtbl: your code here.
+  static const int max_pages = 64;
+  int num;
+  argint(1, &num);
+  if (num > max_pages)
+    return -1;
+
+  uint64 base;
+  uint64 mask_addr;
+  argaddr(0, &base);
+  argaddr(2, &mask_addr);
+
+  pagetable_t pagetable= myproc()->pagetable;
+  uint64 mask = 0;
+  for (int i = 0; i < num; ++i) {
+    pte_t* pte = walk(pagetable, base, 0);
+    if (pte == 0)
+      return -1;
+    if (*pte & PTE_A) {
+      *pte &= ~PTE_A;
+      mask |= (uint64)1 << i;
+    }
+    base += PGSIZE;
+  }
+
+  if (copyout(pagetable, mask_addr, (char*)&mask, (num + 7) & ~7) < 0)
+    return -1;
+
   return 0;
 }
 #endif
