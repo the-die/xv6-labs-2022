@@ -681,3 +681,15 @@ procdump(void)
     printf("\n");
   }
 }
+
+void backtrace(void) {
+  uint64 fp = r_fp();
+  printf("backtrace:\n");
+  // the memory allocated for each kernel stack consists of a single page-aligned page, so that all
+  // the stack frames for a given stack are on the same page
+  uint64 top = PGROUNDUP(fp);
+  while (fp < top) {
+    printf("%p\n", *((uint64*)fp - 1));
+    fp = *((uint64*)fp - 2);
+  }
+}
