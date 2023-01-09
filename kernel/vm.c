@@ -147,7 +147,10 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
 
   if(size == 0)
     panic("mappages: size");
-  
+
+  if ((va & 0xfff) != (pa & 0xfff))
+    panic("mappages: 'va' and 'pa' mismatch");
+
   a = PGROUNDDOWN(va);
   last = PGROUNDDOWN(va + size - 1);
   for(;;){
@@ -436,4 +439,23 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+}
+
+static void pagedir_print(pagetable_t pagetable, int level) {
+  if (level >= PAGEDIR_LEVEL) return;
+
+  for (int i = 0; i < PTE_NUM; ++i) {
+    pte_t pte = pagetable[i];
+    if ((pte & PTE_V) == 0)
+      continue;
+    for (int j = 0; j < level; ++j)
+      printf(" ..");
+    printf(" ..%d: pte %p pa %p\n", i, pte, PTE2PA(pte));
+    pagedir_print((pagetable_t)PTE2PA(pte), level + 1);
+  }
+}
+
+void vmprint(pagetable_t pagetable) {
+  printf("page table %p\n", pagetable);
+  pagedir_print(pagetable, 0);
 }
