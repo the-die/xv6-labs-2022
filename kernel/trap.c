@@ -29,6 +29,32 @@ trapinithart(void)
   w_stvec((uint64)kernelvec);
 }
 
+int cowtrap(uint64 va) {
+  if (va >= MAXVA)
+    return -1;
+
+  struct proc* p = myproc();
+  pte_t* pte = walk(p->pagetable, va, 0);
+  if (pte == 0)
+    return -1;
+
+  uint flags = PTE_FLAGS(*pte);
+  if ((flags & PTE_COW) == 0)
+    return -1;
+
+  void* newpa = kalloc();
+  if (newpa == 0)
+    return -1;
+
+  flags |= PTE_W;
+  flags &= ~PTE_COW;
+  void* oldpa = (void*)PTE2PA(*pte);
+  memmove(newpa, oldpa, PGSIZE);
+  kfree(oldpa);
+  *pte = PA2PTE(newpa) | flags;
+  return 0;
+}
+
 //
 // handle an interrupt, exception, or system call from user space.
 // called from trampoline.S
@@ -46,11 +72,11 @@ usertrap(void)
   w_stvec((uint64)kernelvec);
 
   struct proc *p = myproc();
-  
+
   // save user program counter.
   p->trapframe->epc = r_sepc();
-  
-  if(r_scause() == 8){
+
+  if (r_scause() == 8) {  // Environment call from U-mode
     // system call
 
     if(killed(p))
@@ -65,7 +91,13 @@ usertrap(void)
     intr_on();
 
     syscall();
-  } else if((which_dev = devintr()) != 0){
+  } else if(r_scause() == 15) {  // Store/AMO Page Fault
+    if (killed(p))
+      exit(-1);
+
+    if (cowtrap(r_stval()) < 0)
+      setkilled(p);
+  } else if((which_dev = devintr()) != 0) {
     // ok
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
@@ -131,7 +163,7 @@ usertrapret(void)
 
 // interrupts and exceptions from kernel code go here via kernelvec,
 // on whatever the current kernel stack is.
-void 
+void
 kerneltrap()
 {
   int which_dev = 0;
