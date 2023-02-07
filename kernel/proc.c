@@ -169,6 +169,11 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+  p->interval= 0;
+  p->handler = 0;
+  p->elapse = 0;
+  p->alarm_enable = 0;
+  memset(&p->alarmframe, 0, sizeof(struct trapframe));
 }
 
 // Create a user page table for a given process, with no user memory,
@@ -679,5 +684,17 @@ procdump(void)
       state = "???";
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
+  }
+}
+
+void backtrace(void) {
+  uint64 fp = r_fp();
+  printf("backtrace:\n");
+  // the memory allocated for each kernel stack consists of a single page-aligned page, so that all
+  // the stack frames for a given stack are on the same page
+  uint64 top = PGROUNDUP(fp);
+  while (fp < top) {
+    printf("%p\n", *((uint64*)fp - 1));
+    fp = *((uint64*)fp - 2);
   }
 }
