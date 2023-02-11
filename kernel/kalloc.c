@@ -20,13 +20,19 @@ struct run {
 
 struct {
   struct spinlock lock;
-  struct run *freelist;
-} kmem;
+  struct run* freelist;
+} kmem[NCPU];
+
+static void initmemlock() {
+  for (int i = 0; i < NCPU; ++i) {
+    initlock(&kmem[i].lock, "kmem");
+  }
+}
 
 void
 kinit()
 {
-  initlock(&kmem.lock, "kmem");
+  initmemlock();
   freerange(end, (void*)PHYSTOP);
 }
 
@@ -56,10 +62,13 @@ kfree(void *pa)
 
   r = (struct run*)pa;
 
-  acquire(&kmem.lock);
-  r->next = kmem.freelist;
-  kmem.freelist = r;
-  release(&kmem.lock);
+  push_off();
+  int id = cpuid();
+  acquire(&kmem[id].lock);
+  r->next = kmem[id].freelist;
+  kmem[id].freelist = r;
+  release(&kmem[id].lock);
+  pop_off();
 }
 
 // Allocate one 4096-byte page of physical memory.
@@ -70,11 +79,33 @@ kalloc(void)
 {
   struct run *r;
 
-  acquire(&kmem.lock);
-  r = kmem.freelist;
-  if(r)
-    kmem.freelist = r->next;
-  release(&kmem.lock);
+  push_off();
+  int id = cpuid();
+  acquire(&kmem[id].lock);
+  r = kmem[id].freelist;
+  if(r) {
+    kmem[id].freelist = r->next;
+  }
+  // If cpu0 holds lock lock0 and wants to get lock lock1,
+  // but at the same time cpu1 holds lock lock1 and wants
+  // to get lock lock0, a deadlock will occur in this case.
+  release(&kmem[id].lock);
+
+  if (!r) {
+    for (int i = 0; i < NCPU; ++i) {
+      if (i == id)
+        continue;
+      acquire(&kmem[i].lock);
+      r = kmem[i].freelist;
+      if (r) {
+        kmem[i].freelist = r->next;
+        release(&kmem[i].lock);
+        break;
+      }
+      release(&kmem[i].lock);
+    }
+  }
+  pop_off();
 
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
