@@ -26,6 +26,18 @@ extern char trampoline[]; // trampoline.S
 // must be acquired before any p->lock.
 struct spinlock wait_lock;
 
+static void copy_vma(struct vma* dst, const struct vma* src) {
+  // use memmove?
+  dst->used = src->used;
+  dst->addr = src->addr;
+  dst->length = src->length;
+  dst->prot = src->prot;
+  dst->flags = src->flags;
+  dst->fd = src->fd;
+  dst->offset = src->offset;
+  dst->file = src->file;
+}
+
 // Allocate a page for each process's kernel stack.
 // Map it high in memory, followed by an invalid
 // guard page.
@@ -145,6 +157,8 @@ found:
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
+
+  p->mmap_top = MAXVA - 2 * PGSIZE;
 
   return p;
 }
@@ -279,7 +293,7 @@ growproc(int n)
 int
 fork(void)
 {
-  int i, pid;
+  int i, j, pid;
   struct proc *np;
   struct proc *p = myproc();
 
@@ -289,12 +303,21 @@ fork(void)
   }
 
   // Copy user memory from parent to child.
+  // Also copies the memory mapped area from parent to child.
   if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
     freeproc(np);
     release(&np->lock);
     return -1;
   }
   np->sz = p->sz;
+
+  j = 0;
+  for (i = 0; i < NVMA; ++i) {
+    if (p->vmas[i].used == 0) continue;
+
+    copy_vma(&np->vmas[j++], &p->vmas[i]);
+    filedup(p->vmas[i].file);
+  }
 
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
@@ -357,6 +380,25 @@ exit(int status)
       struct file *f = p->ofile[fd];
       fileclose(f);
       p->ofile[fd] = 0;
+    }
+  }
+
+  // Unmap the process's mapped regions
+  // do it in freeproc?
+  for (int i = 0; i < NVMA; ++i) {
+    struct vma* vma = &p->vmas[i];
+    if (vma->used == 0) continue;
+
+    vma->used = 0;
+    uint64 begin = (uint64)vma->addr;
+    uint64 end = PGROUNDUP((uint64)vma->addr + vma->length);
+    for (uint64 i = begin; i < end; i += PGSIZE) {
+      pte_t* pte = walk(p->pagetable, i, 0);
+      if (pte == 0)
+        panic("exit: walk");
+      if ((*pte & PTE_V) == 0) continue;
+      // uvmunmap only unmap PTE_V enabled pages
+      uvmunmap(p->pagetable, i, 1, 1);
     }
   }
 

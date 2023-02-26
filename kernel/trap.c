@@ -1,8 +1,12 @@
 #include "types.h"
+#include "fcntl.h"
 #include "param.h"
 #include "memlayout.h"
 #include "riscv.h"
 #include "spinlock.h"
+#include "sleeplock.h"
+#include "fs.h"
+#include "file.h"
 #include "proc.h"
 #include "defs.h"
 
@@ -50,7 +54,7 @@ usertrap(void)
   // save user program counter.
   p->trapframe->epc = r_sepc();
   
-  if(r_scause() == 8){
+  if (r_scause() == 8) {  // Environment call from U-mode
     // system call
 
     if(killed(p))
@@ -65,7 +69,78 @@ usertrap(void)
     intr_on();
 
     syscall();
-  } else if((which_dev = devintr()) != 0){
+  } else if (r_scause() == 13 || r_scause() == 15) {  // Load page fault or Store/AMO Page Fault
+    // supervisor interrupt exception code
+    uint64 scause = r_scause();
+    // the faulting virtual address
+    uint64 addr = r_stval();
+    if (addr >= MAXVA) {
+      setkilled(p);
+      goto out;
+    }
+
+    struct vma* vma = 0;
+    for (int i = 0; i < NVMA; ++i) {
+      if (p->vmas[i].used == 0) continue;
+
+      uint64 begin = (uint64)p->vmas[i].addr;
+      uint64 end = begin + p->vmas[i].length;
+      if (addr >= begin && addr < end) {
+        vma = &p->vmas[i];
+        break;
+      }
+    }
+
+    if (vma == 0) {
+      printf("usertrap: the faulting virtual address %p is not in the VMA\n", addr);
+      setkilled(p);
+      goto out;
+    }
+
+    if (scause == 13 && vma->file->readable == 0) {
+      printf("usertrap: the file is unreadable\n");
+      setkilled(p);
+      goto out;
+    }
+
+    if (scause == 15 && vma->file->writable == 0) {
+      printf("usertrap: the file is unwritable\n");
+      setkilled(p);
+      goto out;
+    }
+
+    void* pa = kalloc();
+    if (pa == 0) {
+      printf("usertrap: unable to allocate memory\n");
+      setkilled(p);
+      goto out;
+    }
+    memset(pa, 0, PGSIZE);
+
+    addr = PGROUNDDOWN(addr);
+    int perm = 0;
+    // mappages will set PTE_V
+    perm |= PTE_U;
+    if (vma->prot & PROT_READ)
+      perm |= PTE_R;
+    if (vma->prot & PROT_WRITE)
+      perm |= PTE_W;
+    if (vma->prot & PROT_EXEC)
+      perm |= PTE_X;
+    if (mappages(p->pagetable, addr, PGSIZE, (uint64)pa, perm) != 0) {
+      kfree(pa);
+      setkilled(p);
+      goto out;
+    }
+    ilock(vma->file->ip);
+    if (readi(vma->file->ip, 1, addr, addr - (uint64)vma->addr + vma->offset, PGSIZE) == 0) {
+      iunlock(vma->file->ip);
+      uvmunmap(p->pagetable, addr, 1, 1);
+      setkilled(p);
+      goto out;
+    }
+    iunlock(vma->file->ip);
+  } else if ((which_dev = devintr()) != 0) {
     // ok
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
@@ -73,6 +148,7 @@ usertrap(void)
     setkilled(p);
   }
 
+out:
   if(killed(p))
     exit(-1);
 
@@ -218,4 +294,3 @@ devintr()
     return 0;
   }
 }
-
